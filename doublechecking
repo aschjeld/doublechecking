@@ -1,11 +1,35 @@
-#!/bin/bash
+!#/bin/bash
 
-SBATCH
+SBATCH 
   
-conda activation
+# activate popoolation2 environment
+source /private/groups/kaylab/aschjeld/setup_conda.sh
+conda activate popoolation2
 
 
-# Prepare the reference genome
-mkdir ref
-mv refgenome ref
-  
+# STEP 1: navigate to the indexed reference genome
+cd /private/home/aschjeld/popoolation2/populations/gi/ref/refgenome
+
+# STEP 2: align fastq files to the reference genome
+
+mkdir map
+bwa aln -n 0.01 -l 100 -o 1 -d 12 -e 12 -t 8 ref/refgenome pop1p.1.fastq > map/pop1p.sai
+bwa aln -n 0.01 -l 100 -o 1 -d 12 -e 12 -t 8 ref/refgenome pop1w.1.fastq > map/pop2w.sai
+
+bwa samse ref/refgenome map/pop1p.sai pop1p.1.fastq > map/pop1p.sam
+bwa samse ref/refgenome map/pop1w.sai pop1w.1.fastq > map/pop1w.sam  
+
+# STEP 3: REMOVE AMBIGUOUSLY MAPPED READS
+
+samtools view -q 20 -bS map/pop1p.sam | samtools sort - map/pop1p
+samtools view -q 20 -bS map/pop1w.sam | samtools sort - map/pop1w
+
+# STEP 4: REAL POPOOLATION2 WORKFLOW BEGINS. CREATE A SYNC FILE
+
+java -ea -Xmx7g -jar /private/groups/kaylab/popoolation2/populations/gi/popoolation2_1201/mpileup2sync.jar 
+  --input p1_p2.mpileup 
+  --output p1_p2_java.sync   
+  --fastq-type sanger 
+  --min-qual 20 
+  --threads 8
+
