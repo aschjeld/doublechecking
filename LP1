@@ -1,0 +1,231 @@
+#!/bin/bash
+
+#SBATCH --job-name=fastLP1
+#SBATCH --output=fastLP1.out
+#SBATCH --error=fastLP1.err
+
+#SBATCH --partition=512x64-ib
+#SBATCH --qos=ib
+#SBATCH --account=ib
+
+#SBATCH --nodes=1
+#SBATCH --ntasks=1
+#SBATCH --cpus-per-task=64
+#SBATCH --mem=500            # give job full node memory
+#SBATCH --time=infinite      # adjust as needed
+#SBATCH --hint=nomultithread # ensures real cores, not hyperthreads
+
+# Load conda
+source ~/miniconda3/etc/profile.d/conda.sh
+conda activate base
+
+# Load modules
+module load java/8u151
+module load bwa/0.7.17
+module load samtools/1.16.1
+module load perl/5.40.0
+
+# Silence perl locale warnings
+export LC_ALL=C
+export LANG=C
+
+set -euo pipefail
+set -x
+
+########################################
+#           USER SETTINGS
+########################################
+
+# Node resources
+TOTAL_THREADS=64      # matches --cpus-per-task=64
+
+TOTAL_MEM_GB=500        # matches --mem=0 (full node) OR specify actual
+
+# Thread allocation (balanced)
+BWA_THREADS=16
+VIEW_THREADS=4
+SORT_THREADS=8
+
+# Samtools sort memory per thread
+SORT_MEM="2G"           # Keeps RAM usage ≈ 16 × 2G = 32 GB
+
+# Java memory for Popoolation
+JAVA_MEM="8G"
+
+# Reference (must already be bwa-indexed)
+REF=/hb/groups/kay_lab/popoolation2/reference/refgenome
+# Popoolation folder
+POPDIR=/hb/groups/kay_lab/popoolation2/popoolation2_1201
+
+# Samples to map
+SAMPLES=("pop1p.1" "pop1w.1")
+
+########################################
+#        DIRECTORY SETUP
+########################################
+cd /hb/groups/kay_lab/popoolation2/populations/LP1
+mkdir -p map
+
+########################################
+#     STEP 1 — MAP + FILTER + SORT
+########################################
+for SAMPLE in "${SAMPLES[@]}"; do
+        FASTQ=${SAMPLE}.fastq.gz
+        BAM="map/${SAMPLE}.sorted.bam"
+        if [[ ! -s "$BAM" ]]; then
+                echo "Aligning $SAMPLE"
+
+                bwa mem -t $BWA_THREADS $REF $FASTQ \
+                | samtools view -@ $VIEW_THREADS -q 20 -b - \
+                | samtools sort \
+                        -@ $SORT_THREADS \
+                        -m $SORT_MEM \
+                        -o map/${SAMPLE}.sorted.bam \
+                        -T map/${SAMPLE}.temp
+        else
+                echo "Skipping $SAMPLE - $BAM already exists"
+        fi
+done
+########################################
+#     STEP 2 — MPILEUP
+########################################
+if [[ ! -s p1p_p1w.mpileup ]]; then
+        echo "STEP 2: Generating mpileup"
+
+    samtools mpileup \
+        -B -Q 0 \
+        -f "$REF" \
+        map/pop1p.1.sorted.bam \
+        map/pop1w.1.sorted.bam \
+        > p1p_p1w.mpileup
+else
+        echo "STEP 2: Skipping mpileup, p1p_p1w.mpileup already exists"
+fi
+
+########################################
+#     STEP 3 — SYNC
+########################################
+#     STEP 3 — SYNC
+########################################
+if [[ ! -s p1p_p1w.sync ]]; then
+        echo "STEP 3: Converting mpileup → sync"
+
+    java -Xmx"$JAVA_MEM" -jar "$POPDIR"/mpileup2sync.jar \
+        --input p1p_p1w.mpileup \
+        --output p1p_p1w.sync \
+        --fastq-type sanger \
+        --min-qual 20 \
+        --threads 4
+else
+    echo "STEP 3: Skipping sync — p1p_p1w.sync already exists"
+fi
+########################################
+#     STEP 4 — SNP FREQ DIFF
+########################################
+if [[ ! -s p4p_p4w.pwc ]]; then
+    echo "STEP 4: Calculating SNP frequency differences"
+
+    perl "$POPDIR"/snp-frequency-diff.pl \
+        --input p1p_p1w.sync \
+        --output-prefix p4p_p4w \
+        --min-count 6 \
+        --min-coverage 50 \
+        --max-coverage 200
+else
+    echo "STEP 4: Skipping SNP diff — p1p_p1w.pwc already exists"
+fi
+
+########################################
+#     STEP 5 — FST WINDOWS
+########################################
+for WS in 1 500; do
+    if [[ $WS -eq 500 ]]; then
+        OUT=p1p_p1w_w500
+    else
+        OUT=p1p_p1w
+    fi
+
+    if [[ ! -s ${OUT}.fst ]]; then
+        echo "STEP 5: Calculating FST — window size $WS → ${OUT}.fst"
+        
+        perl "$POPDIR"/fst-sliding.pl \
+            --input p1p_p1w.sync \
+            --output ${OUT}.fst \
+            --suppress-noninformative \
+            --min-count 6 \
+            --min-coverage 50 \
+            --max-coverage 200 \
+            --min-covered-fraction 1 \
+            --window-size $WS \
+            --step-size $WS \
+            --pool-size 500
+    else
+        echo "STEP 5: Skipping FST ($WS bp) — ${OUT}.fst already exists"   fi
+done
+
+########################################
+#     STEP 6 — EXPORT FST → IGV
+########################################
+for OUT in p1p_p1w p1p_p1w_w500; do
+    if [[ ! -s ${OUT}.igv ]]; then
+        echo "STEP 6: Exporting ${OUT}.fst → ${OUT}.igv"
+
+        perl "$POPDIR"/export/pwc2igv.pl \
+            --input ${OUT}.fst \
+            --output ${OUT}.igv
+    else
+        echo "STEP 6: Skipping IGV export — ${OUT}.igv already exists"
+    fi
+done
+
+########################################
+#     STEP 7 — FISHER TEST 
+########################################
+# Load perl (harmless to other modules)
+module load perl
+
+# Enable user-installed cpanminus and modules
+export PATH="$HOME/perl5/bin:$PATH"
+export PERL5LIB="$HOME/perl5/lib/perl5:$PERL5LIB"
+
+# Install cpanminus locally if not found
+if ! command -v cpanm >/dev/null 2>&1; then
+    curl -L https://cpanmin.us | perl - --local-lib="$HOME/perl5" App::cpanminus
+fi
+
+# Install the Fisher module if missing
+if ! perl -MText::NSP::Measures::2D::Fisher::twotailed -e 1 &>/dev/null; then
+    cpanm --notest Text::NSP::Measures::2D::Fisher::twotailed
+fi
+
+# === FINAL CHECK before running Fisher test ===
+if perl -MText::NSP::Measures::2D::Fisher::twotailed -e 1 &>/dev/null; then
+
+    if [[ ! -f p1p_p1w.fet ]]; then
+        perl "$POPDIR"/fisher-test.pl \
+            --input  p1p_p1w.sync \
+            --output p1p_p1w.fet \
+            --min-count 6 \
+            --min-coverage 50 \
+            --max-coverage 200 \
+            --suppress-noninformative
+    fi
+
+    if [[ ! -f p1p_p1w_fet.igv ]]; then
+ perl "$POPDIR"/export/pwc2igv.pl \
+            --input  p1p_p1w.fet \
+            --output p1p_p1w_fet.igv
+    fi
+
+    # Print completion message if outputs exist and are non-empty
+    if [[ -s p1p_p1w.fet && -s p1p_p1w_fet.igv ]]; then
+        echo "Pipeline complete"
+    else
+        echo "WARNING: Fisher pipeline ran but outputs are missing or empty"
+    fi
+
+else
+    echo "WARNING: Skipping Fisher test — missing Perl module:"
+    echo "  Text::NSP::Measures::2D::Fisher::twotailed"
+    echo "  (FST results are still valid)"
+fi
