@@ -1,0 +1,190 @@
+#!/bin/bash
+
+#SBATCH --job-name=fastLP2
+#SBATCH --output=fastLP2.out
+#SBATCH --error=fastLP2.err
+
+#SBATCH --partition=512x64-ib
+#SBATCH --qos=ib
+#SBATCH --account=ib
+
+#SBATCH --nodes=1
+#SBATCH --ntasks=1
+#SBATCH --cpus-per-task=64
+#SBATCH --mem=160            # give job full node memory
+#SBATCH --time=infinite      # adjust as needed
+#SBATCH --hint=nomultithread # ensures real cores, not hyperthreads
+
+# Load conda
+source ~/miniconda3/etc/profile.d/conda.sh
+conda activate base
+
+# Load modules
+module load java/8u151
+module load bwa/0.7.17
+module load samtools/1.16.1
+module load perl/5.40.0
+
+set -euo pipefail
+set -x
+
+########################################
+#           USER SETTINGS
+########################################
+
+# Node resources
+TOTAL_THREADS=64      # matches --cpus-per-task=64
+
+TOTAL_MEM_GB=500        # matches --mem=0 (full node) OR specify actual
+
+# Thread allocation (balanced)
+BWA_THREADS=16
+VIEW_THREADS=4
+SORT_THREADS=8
+
+# Samtools sort memory per thread
+SORT_MEM="2G"           # Keeps RAM usage ≈ 16 × 2G = 32 GB
+
+# Java memory for Popoolation
+JAVA_MEM="8G"
+
+# Reference (must already be bwa-indexed)
+REF=/hb/groups/kay_lab/popoolation2/reference/refgenome
+
+# Popoolation folder
+POPDIR=/hb/groups/kay_lab/popoolation2/popoolation2_1201
+# Samples to map
+SAMPLES=("pop2p.1" "pop2w.1")
+
+########################################
+#        DIRECTORY SETUP
+########################################
+cd /hb/groups/kay_lab/popoolation2/populations/LP2
+mkdir -p map
+
+########################################
+#     STEP 1 — MAP + FILTER + SORT
+########################################
+for SAMPLE in "${SAMPLES[@]}"; do
+        FASTQ=${SAMPLE}.fastq.gz
+        BAM="map/${SAMPLE}.sorted.bam"
+        if [[ ! -s "$BAM" ]]; then
+                echo "Aligning $SAMPLE"
+
+                bwa mem -t $BWA_THREADS $REF $FASTQ \
+                | samtools view -@ $VIEW_THREADS -q 20 -b - \
+                | samtools sort \
+                        -@ $SORT_THREADS \
+                        -m $SORT_MEM \
+                        -o map/${SAMPLE}.sorted.bam \
+                        -T map/${SAMPLE}.temp
+        else
+                echo "Skipping $SAMPLE - $BAM already exists"
+        fi
+done
+
+########################################
+#     STEP 2 — MPILEUP
+########################################
+if [[ ! -f p2p_p2w.mpileup ]]; then
+    samtools mpileup \
+        -B -Q 0 \
+        -f "$REF" \
+        map/pop2p.1.sorted.bam \
+        map/pop2w.1.sorted.bam \
+        > p2p_p2w.mpileup
+fi
+
+########################################
+#     STEP 3 — SYNC
+########################################
+if [[ ! -f p2p_p2w.sync ]]; then
+    java -Xmx"$JAVA_MEM" -jar "$POPDIR"/mpileup2sync.jar \
+        --input p2p_p2w.mpileup \
+        --output p2p_p2w.sync \
+        --fastq-type sanger \
+        --min-qual 20 \
+        --threads 4
+fi
+########################################
+#     STEP 4 — SNP FREQ DIFF
+########################################
+if [[ ! -f p2p_p2w.pwc ]]; then
+    perl "$POPDIR"/snp-frequency-diff.pl \
+        --input p2p_p2w.sync \
+        --output-prefix p2p_p2w \
+        --min-count 6 \
+        --min-coverage 50 \
+        --max-coverage 200
+fi
+
+########################################
+#     STEP 5 — FST WINDOWS
+########################################
+for WS in 1 500; do
+    OUT=p2p_p2w
+    [[ $WS -eq 500 ]] && OUT=p2p_p2w_w500
+
+    if [[ ! -f ${OUT}.fst ]]; then
+        perl "$POPDIR"/fst-sliding.pl \
+            --input p2p_p2w.sync \
+            --output ${OUT}.fst \
+            --suppress-noninformative \
+            --min-count 6 \
+            --min-coverage 50 \
+            --max-coverage 200 \
+            --min-covered-fraction 1 \
+            --window-size $WS \
+            --step-size $WS \
+            --pool-size 500
+    fi
+done
+
+########################################
+#     STEP 6 — EXPORT FST → IGV
+########################################
+for OUT in p2p_p2w p2p_p2w_w500; do
+    if [[ ! -f ${OUT}.igv ]]; then
+        perl "$POPDIR"/export/pwc2igv.pl \
+            --input ${OUT}.fst \
+            --output ${OUT}.igv
+    fi
+done
+
+########################################
+#     STEP 7 — FISHER TEST
+########################################
+
+# Load perl (harmless to other modules)
+module load perl
+
+# Enable user-installed cpanminus and modules
+export PATH="$HOME/perl5/bin:$PATH"
+export PERL5LIB="$HOME/perl5/lib/perl5:$PERL5LIB"
+# Install cpanminus locally if not found
+if ! command -v cpanm >/dev/null 2>&1; then
+    curl -L https://cpanmin.us | perl - --local-lib="$HOME/perl5" App::cpanminus
+fi
+
+# Install the Fisher module if missing
+if ! perl -MText::NSP::Measures::2D::Fisher::twotailed -e 1 &>/dev/null; then
+    cpanm --notest Text::NSP::Measures::2D::Fisher::twotailed
+fi
+
+if [[ ! -f p2p_p2w.fet ]]; then
+    perl "$POPDIR"/fisher-test.pl \
+        --input p2p_p2w.sync \
+        --output p2p_p2w.fet \
+        --min-count 6 \
+        --min-coverage 50 \
+        --max-coverage 200 \
+        --suppress-noninformative
+fi
+
+if [[ ! -f p2p_p2w_fet.igv ]]; then
+    perl "$POPDIR"/export/pwc2igv.pl \
+        --input p2p_p2w.fet \
+        --output p2p_p2w_fet.igv
+fi
+
+echo "PIPELINE COMPLETE."
