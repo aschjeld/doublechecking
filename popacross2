@@ -1,0 +1,89 @@
+#!/bin/bash
+
+#SBATCH --job-name=popacross2
+#SBATCH --output=popacross2.out
+#SBATCH --error=popacross2.err
+#SBATCH --partition=long
+#SBATCH --nodes=1
+#SBATCH --ntasks=1
+#SBATCH --cpus-per-task=20
+#SBATCH --mem=20gb
+#SBATCH --time=100:00:00
+
+source /private/groups/kaylab/aschjeld/setup_conda.sh
+conda activate popoolation2
+
+REF=/private/groups/kaylab/popoolation2/populations/gi/LP2/ref/refgenome
+POPDIR=/private/groups/kaylab/popoolation2/populations/gi/popoolation2_1201
+
+# since this workflow is ACROSS populations, we will be utilizing the already created bam and bai files and jump straight into samtools mpileup!
+
+BAMDIR=/private/groups/kaylab/popoolation2/populations/gi
+cd $BAMDIR/popacross
+
+# skipping to step 3 
+
+# Step 3: Calculate Fst for every allele difference (SNP)
+    perl "$POPDIR"/fst-sliding.pl \
+        --input p_w.sync \
+        --output p_w.fst \
+        --suppress-noninformative \
+        --min-count 6 \
+        --min-coverage 20 \
+        --max-coverage 200 \
+        --min-covered-fraction 0.6 \
+        --window-size 1 \
+        --step-size 1 \
+        --pool-size 100
+
+echo "Fst at every SNP calculated"
+
+# Step 4: Calculate Fst using sliding window approach
+    perl "$POPDIR"/fst-sliding.pl \
+      --input p_w.sync \
+      --output p_w500.fst \
+      --min-count 6 \
+      --min-coverage 20 \
+      --max-coverage 200 \
+      --min-covered-fraction 0.6 \
+      --window-size 500 \
+      --step-size 500 \
+      --pool-size 100
+
+echo "fst using sliding window approach complete"
+
+# Step 5: Convert files to IGV format
+    perl "$POPDIR"/export/pwc2igv.pl \
+      --input p_w.fst \
+      --output p_w.igv
+
+# Use Fisher's Exact Test to calculate Fst
+    perl "$POPDIR"/fisher-test.pl \
+      --input p_w.sync \
+      --output p_w.fet \
+      --min-count 6 \
+      --min-coverage 20 \
+      --max-coverage 200 \
+      --suppress-noninformative
+echo "Fisher test to calculate Fst done" 
+
+# convert the above to IGV file format
+    perl "$POPDIR"/export/pwc2igv.pl \
+      --input p_w.fet \
+      --output p_w_fet.igv
+  
+echo "Fst for genes converting" 
+
+# Calculate Fst for every gene
+    perl "$POPDIR"/fst-sliding.pl \
+      --min-count 6 \
+      --min-coverage 20 \
+      --max-coverage 200 \
+      --pool-size 100 \
+      --min-covered-fraction 0.6 \
+      --window-size 1000000 \
+      --step-size 1000000 \
+      --input p_w_genes.sync \
+      --output p_w_genewise.fst
+
+echo "pipeline complete"
