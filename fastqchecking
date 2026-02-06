@@ -1,0 +1,86 @@
+#!/bin/bash
+#SBATCH --job-name=fastq_cram_check_pop2p
+#SBATCH --output=fastq_cram_check_pop2p.out
+#SBATCH --error=fastq_cram_check_pop2p.err
+#SBATCH --partition=128x24
+#SBATCH --time=06:00:00
+#SBATCH --cpus-per-task=4
+#SBATCH --mem=16G
+
+# ---- LOAD SOFTWARE ----
+module load samtools   # adjust if you normally use conda instead
+
+# ---- FILE PATHS ----
+FASTQ_DIR="/hb/groups/kay_lab/popoolation2/populations/LP2"
+CRAM_FILE="/hb/groups/kay_lab/LPJRpoolGWAS/data/crams/pop2p.cram"
+
+FASTQ_PATTERN="${FASTQ_DIR}/pop2p.*.fastq.gz"
+
+echo "Starting FASTQ integrity + CRAM comparison"
+echo "Time: $(date)"
+echo "-------------------------------------------"
+
+# ==========================
+# FASTQ FILE CHECKS
+# ==========================
+for fq in $FASTQ_PATTERN; do
+
+    echo ""
+    echo "Checking file: $fq"
+
+    # ---- 1. Quick gzip integrity test ----
+    zcat "$fq" | head -c 1000000 > /dev/null
+
+    if [ $? -eq 0 ]; then
+        echo "  ✓ gzip quick test passed"
+    else
+        echo "  ✗ gzip quick test FAILED"
+        continue
+    fi
+
+
+    # ---- 2. FASTQ 4-line structure check (first 1000 reads) ----
+    zcat "$fq" | awk '
+    NR<=4000 {
+        if(NR%4==1) h++;
+        if(NR%4==2) s++;
+        if(NR%4==3) p++;
+        if(NR%4==0) q++;
+    }
+    END {
+        print "  FASTQ structure counts:";
+        print "    header:",h,"seq:",s,"plus:",p,"qual:",q
+    }'
+
+
+    # ---- 3. Read length sampling ----
+    lengths=$(zcat "$fq" | sed -n '2~4p' | head -n 1000 | awk '{print length($0)}' | sort -nu | tr '\n' ',')
+
+    echo "  Unique read lengths (first 1000 reads): ${lengths%,}"
+
+done
+
+
+# ==========================
+# CRAM vs FASTQ READ COUNT
+# ==========================
+echo ""
+echo "-------------------------------------------"
+echo "Comparing total read counts..."
+
+CRAM_READS=$(samtools view -c "$CRAM_FILE")
+
+FASTQ_LINES=$(zcat $FASTQ_PATTERN | wc -l)
+FASTQ_READS=$((FASTQ_LINES / 4))
+
+echo "CRAM reads : $CRAM_READS"
+echo "FASTQ reads: $FASTQ_READS"
+
+if [ "$CRAM_READS" -eq "$FASTQ_READS" ]; then
+    echo "✓ FASTQ represents CRAM correctly"
+else
+    echo "⚠ Read counts differ — investigate conversion or filtering"
+fi
+
+echo "-------------------------------------------"
+echo "Finished: $(date)"
