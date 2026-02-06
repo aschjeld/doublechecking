@@ -1,6 +1,6 @@
 !#/bin/bash
 
-SBATCH 
+#SBATCH 
   
 # activate popoolation2 environment
 source /private/groups/kaylab/aschjeld/setup_conda.sh
@@ -10,14 +10,16 @@ conda activate popoolation2
 # STEP 1: navigate to the indexed reference genome
 cd /private/home/aschjeld/popoolation2/populations/gi/ref/refgenome
 
-# STEP 2: align fastq files to the reference genome
+# STEP 2: align fastq files to the reference genome or navigate to fastq's already aligned
 
 mkdir map
-bwa aln -n 0.01 -l 100 -o 1 -d 12 -e 12 -t 8 ref/refgenome pop1p.1.fastq > map/pop1p.sai
-bwa aln -n 0.01 -l 100 -o 1 -d 12 -e 12 -t 8 ref/refgenome pop1w.1.fastq > map/pop2w.sai
+bwa aln -n 0.01 -l 100 -o 1 -d 12 -e 12 -t 8 ref/refgenome pop1p_split_aa.gz > map/pop1p.sai
+bwa aln -n 0.01 -l 100 -o 1 -d 12 -e 12 -t 8 ref/refgenome pop1w_split_aa.gz > map/pop2w.sai
 
 bwa samse ref/refgenome map/pop1p.sai pop1p.1.fastq > map/pop1p.sam
 bwa samse ref/refgenome map/pop1w.sai pop1w.1.fastq > map/pop1w.sam  
+
+cd /private/groups/kaylab/popoolation2/populations/gi/LP1/pop1p_aa_
 
 # STEP 3: REMOVE AMBIGUOUSLY MAPPED READS
 
