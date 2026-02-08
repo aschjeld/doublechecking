@@ -1,7 +1,7 @@
 #!/bin/bash
-#SBATCH --job-name=LP2
-#SBATCH --output=LP2.out
-#SBATCH --error=LP2.err
+#SBATCH --job-name=LP3
+#SBATCH --output=LP3.out
+#SBATCH --error=LP3.err
 #SBATCH --partition=128x24
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
@@ -31,12 +31,12 @@ set -x
 # Paths
 ########################################
 
-WORKDIR=/hb/groups/kay_lab/popoolation2/populations/LP2
-POPDIR=/hb/groups/kay_lab/popoolation2/populations/popoolation2_1201
+WORKDIR=/hb/groups/kay_lab/popoolation2/populations/LP3
+POPDIR=/hb/groups/kay_lab/popoolation2/populations/LP2/popoolation2_1201
 
 cd "$WORKDIR"
 
-[[ -f p2p_p2w.sync ]] || { echo "Missing sync file"; exit 1; }
+[[ -f p3p_p3w.sync ]] || { echo "Missing sync file"; exit 1; }
 
 ########################################
 # STEP 5 — FST WINDOWS
@@ -47,14 +47,14 @@ echo "Starting FST calculation $(date)"
 for WS in 1 500; do
 
     if [[ $WS -eq 500 ]]; then
-        OUT=p2p_p2w_w500
+        OUT=p3p_p3w_w500
     else
-        OUT=p2p_p2w
+        OUT=p3p_p3w
     fi
 
     if [[ ! -s ${OUT}.fst ]]; then
         perl "$POPDIR"/fst-sliding.pl \
-            --input p2p_p2w.sync \
+            --input p3p_p3w.sync \
             --output ${OUT}.fst \
             --suppress-noninformative \
             --min-count 6 \
@@ -71,7 +71,7 @@ done
 # STEP 6 — EXPORT FST → IGV
 ########################################
 
-for OUT in p2p_p2w p2p_p2w_w500; do
+for OUT in p3p_p3w p3p_p3w_w500; do
     if [[ ! -s ${OUT}.igv ]]; then
         perl "$POPDIR"/export/pwc2igv.pl \
             --input ${OUT}.fst \
@@ -85,20 +85,20 @@ done
 
 echo "Starting Fisher test $(date)"
 
-if [[ ! -s p2p_p2w.fet ]]; then
+if [[ ! -s p3p_p3w.fet ]]; then
     perl "$POPDIR"/fisher-test.pl \
-        --input  p2p_p2w.sync \
-        --output p2p_p2w.fet \
+        --input  p3p_p3w.sync \
+        --output p3p_p3w.fet \
         --min-count 6 \
         --min-coverage 50 \
         --max-coverage 200 \
         --suppress-noninformative
 fi
 
-if [[ ! -s p2p_p2w_fet.igv ]]; then
+if [[ ! -s p3p_p3w_fet.igv ]]; then
     perl "$POPDIR"/export/pwc2igv.pl \
-        --input  p2p_p2w.fet \
-        --output p2p_p2w_fet.igv
+        --input  p3p_p3w.fet \
+        --output p3p_p3w_fet.igv
 fi
 
 echo "Pipeline complete $(date)"
