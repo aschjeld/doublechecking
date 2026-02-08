@@ -20,48 +20,50 @@ module load java
 export PATH="$HOME/perl5/bin:$PATH"
 export PERL5LIB="$HOME/perl5/lib/perl5:$PERL5LIB"
 
-# Test module
-perl -MText::NSP::Measures::2D::Fisher::twotailed -e 'print "Perl module works\n"'
-
 export LC_ALL=C
 export LANG=C
 
 set -euo pipefail
 set -x
 
-# generating mpileup file
-cd /hb/groups/kay_lab/popoolation2/populations/LP1
-
-echo "Creating mpileup..."
-
-samtools mpileup -B -f ref/refgenome.fa \
-    map/pop1p.sorted.bam \
-    map/pop1w.sorted.bam \
-    > p1p_p1w.mpileup
-
-echo "Converting mpileup to sync..."
-
-java -ea -Xmx28g -jar /path/to/popoolation2/mpileup2sync.jar \
-    --input p1p_p1w.mpileup \
-    --output p1p_p1w.sync \
-    --fastq-type sanger \
-    --min-qual 20 \
-    --threads 8
-
-
+########################################
+# Paths
+########################################
 
 WORKDIR=/hb/groups/kay_lab/popoolation2/populations/LP1
-POPDIR=/hb/groups/kay_lab/popoolation2/populations/LP1/popoolation2_1201
+POPDIR=$WORKDIR/popoolation2_1201
+SYNC=p1p_p1w.sync
 
 cd "$WORKDIR"
 
-[[ -f p1p_p1w.sync ]] || { echo "Missing sync file"; exit 1; }
+########################################
+# STEP 4 — BAM → SYNC (piped, no mpileup file)
+########################################
+
+if [[ ! -s $SYNC ]]; then
+
+    echo "Creating sync file $(date)"
+
+    samtools mpileup \
+        -B \
+        -d 1000 \
+        -f ref/refgenome.fa \
+        map/pop1p.sorted.bam \
+        map/pop1w.sorted.bam \
+    | java -ea -Xmx28g -jar "$POPDIR/mpileup2sync.jar" \
+        --input - \
+        --output $SYNC \
+        --fastq-type sanger \
+        --min-qual 20 \
+        --threads 16
+
+fi
 
 ########################################
 # STEP 5 — FST WINDOWS
 ########################################
 
-echo "Starting FST calculation $(date)"
+echo "Starting FST $(date)"
 
 for WS in 1 500; do
 
@@ -72,8 +74,8 @@ for WS in 1 500; do
     fi
 
     if [[ ! -s ${OUT}.fst ]]; then
-        perl "$POPDIR"/fst-sliding.pl \
-            --input p1p_p1w.sync \
+        perl "$POPDIR/fst-sliding.pl" \
+            --input $SYNC \
             --output ${OUT}.fst \
             --suppress-noninformative \
             --min-count 6 \
@@ -92,7 +94,7 @@ done
 
 for OUT in p1p_p1w p1p_p1w_w500; do
     if [[ ! -s ${OUT}.igv ]]; then
-        perl "$POPDIR"/export/pwc2igv.pl \
+        perl "$POPDIR/export/pwc2igv.pl" \
             --input ${OUT}.fst \
             --output ${OUT}.igv
     fi
@@ -102,11 +104,11 @@ done
 # STEP 7 — FISHER TEST
 ########################################
 
-echo "Starting Fisher test $(date)"
+echo "Starting Fisher $(date)"
 
 if [[ ! -s p1p_p1w.fet ]]; then
-    perl "$POPDIR"/fisher-test.pl \
-        --input  p1p_p1w.sync \
+    perl "$POPDIR/fisher-test.pl" \
+        --input  $SYNC \
         --output p1p_p1w.fet \
         --min-count 6 \
         --min-coverage 50 \
@@ -115,9 +117,10 @@ if [[ ! -s p1p_p1w.fet ]]; then
 fi
 
 if [[ ! -s p1p_p1w_fet.igv ]]; then
-    perl "$POPDIR"/export/pwc2igv.pl \
+    perl "$POPDIR/export/pwc2igv.pl" \
         --input  p1p_p1w.fet \
         --output p1p_p1w_fet.igv
 fi
 
 echo "Pipeline complete $(date)"
+
