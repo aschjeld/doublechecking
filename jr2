@@ -1,0 +1,140 @@
+#!/bin/bash
+
+#SBATCH --job-name=LP2
+#SBATCH --output=LP2.out
+#SBATCH --error=LP2.err
+
+#SBATCH --partition=long
+#SBATCH --nodes=1
+#SBATCH --ntasks=1
+#SBATCH --cpus-per-task=16
+#SBATCH --mem=40gb
+#SBATCH --time=3-00:00:00
+
+# Load conda
+source /private/groups/kaylab/aschjeld/setup_conda.sh
+conda activate popoolation2
+
+# Silence perl locale warnings
+export LC_ALL=C
+export LANG=C
+
+set -euo pipefail
+set -x
+
+########################################
+#           USER SETTINGS
+########################################
+
+# Node resources
+TOTAL_THREADS=16      # matches --cpus-per-task=64
+
+TOTAL_MEM_GB=40        # matches --mem=0 (full node) OR specify actual
+
+# Thread allocation (balanced)
+BWA_THREADS=8
+VIEW_THREADS=2
+SORT_THREADS=4
+
+# Samtools sort memory per thread
+SORT_MEM="4G"           # Keeps RAM usage ≈ 16 × 2G = 32 GB
+
+# Java memory for Popoolation
+JAVA_MEM="12G"
+
+# Reference (must already be bwa-indexed)
+REF=/private/groups/kaylab/popoolation2/populations/ref/refgenome
+# Popoolation folder
+POPDIR=/private/groups/kaylab/popoolation2/populations/popoolation2_1201
+
+# Samples to map
+SAMPLES=("pop2p" "pop2w")
+
+########################################
+#     STEP 5 — FST WINDOWS
+########################################
+for WS in 1 500; do
+    if [[ $WS -eq 500 ]]; then
+        OUT=p2p_p2w_w500
+    else
+        OUT=p2p_p2w
+    fi
+
+    if [[ ! -s ${OUT}.fst ]]; then
+        perl "$POPDIR"/fst-sliding.pl \
+            --input p2p_p2w.sync \
+            --output ${OUT}.fst \
+            --suppress-noninformative \
+            --min-count 6 \
+            --min-coverage 50 \
+            --max-coverage 200 \
+            --min-covered-fraction 1 \
+            --window-size $WS \
+            --step-size $WS \
+            --pool-size 50
+    fi
+done
+
+########################################
+#     STEP 6 — EXPORT FST → IGV
+########################################
+for OUT in p2p_p2w p1p_p1w_w500; do
+    if [[ ! -s ${OUT}.igv ]]; then
+        perl "$POPDIR"/export/pwc2igv.pl \
+            --input ${OUT}.fst \
+            --output ${OUT}.igv
+    fi
+done
+
+########################################
+#     STEP 7 — FISHER TEST 
+########################################
+
+# Load perl (harmless to other modules)
+module load perl
+
+# Enable user-installed cpanminus and modules
+export PATH="$HOME/perl5/bin:$PATH"
+export PERL5LIB="$HOME/perl5/lib/perl5:$PERL5LIB"
+
+# Install cpanminus locally if not found
+if ! command -v cpanm >/dev/null 2>&1; then
+    curl -L https://cpanmin.us | perl - --local-lib="$HOME/perl5" App::cpanminus
+fi
+
+# Install the Fisher module if missing
+if ! perl -MText::NSP::Measures::2D::Fisher::twotailed -e 1 &>/dev/null; then
+    cpanm --notest Text::NSP::Measures::2D::Fisher::twotailed
+fi
+
+# === FINAL CHECK before running Fisher test ===
+if perl -MText::NSP::Measures::2D::Fisher::twotailed -e 1 &>/dev/null; then
+
+    if [[ ! -f p2p_p2w.fet ]]; then
+        perl "$POPDIR"/fisher-test.pl \
+            --input  p2p_p2w.sync \
+            --output p2p_p2w.fet \
+           --min-count 6 \
+            --min-coverage 50 \
+            --max-coverage 200 \
+            --suppress-noninformative
+    fi
+
+    if [[ ! -f p2p_p2w_fet.igv ]]; then
+        perl "$POPDIR"/export/pwc2igv.pl \
+            --input  p2p_p2w.fet \
+            --output p2p_p2w_fet.igv
+    fi
+
+    # Print completion message if outputs exist and are non-empty
+    if [[ -s p2p_p2w.fet && -s p2p_p2w_fet.igv ]]; then
+        echo "Pipeline complete"
+    else
+        echo "WARNING: Fisher pipeline ran but outputs are missing or empty"
+    fi
+
+else
+    echo "WARNING: Skipping Fisher test — missing Perl module:"
+    echo "  Text::NSP::Measures::2D::Fisher::twotailed"
+    echo "  (FST results are still valid)"
+fi
