@@ -83,7 +83,7 @@ for WS in 1 500; do
             --min-covered-fraction 1 \
             --window-size $WS \
             --step-size $WS \
-            --pool-size 58
+            --pool-size 100
     fi
 done
 
@@ -108,7 +108,7 @@ echo "Starting Fisher $(date)"
 if [[ ! -s p2p_p2w.fet ]]; then
     perl "$POPDIR/fisher-test.pl" \
         --input  $SYNC \
-        --output p1p_p1w.fet \
+        --output p2p_p2w.fet \
         --min-count 6 \
         --min-coverage 50 \
         --max-coverage 200 \
