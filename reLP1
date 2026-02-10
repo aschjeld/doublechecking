@@ -1,21 +1,20 @@
 #!/bin/bash
-#SBATCH --job-name=LP1
-#SBATCH --output=LP1.out
-#SBATCH --error=LP1.err
-#SBATCH --partition=128x24
+#SBATCH --job-name=LP2
+#SBATCH --output=LP2.out
+#SBATCH --error=LP2.err
+#SBATCH --partition=long
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=16
 #SBATCH --mem=40G
-#SBATCH --time=3-00:00:00
+#SBATCH --time=7-00:00:00
 
 ########################################
 # Load environment
 ########################################
 
-module load perl
-module load samtools
-module load java
+source /private/groups/kaylab/aschjeld/setup_conda.sh
+conda activate popoolation2
 
 export PATH="$HOME/perl5/bin:$PATH"
 export PERL5LIB="$HOME/perl5/lib/perl5:$PERL5LIB"
@@ -30,9 +29,9 @@ set -x
 # Paths
 ########################################
 
-WORKDIR=/hb/groups/kay_lab/popoolation2/populations/LP1
+WORKDIR=/private/groups/kaylab/popoolation2/populations/gi/LP2
 POPDIR=$WORKDIR/popoolation2_1201
-SYNC=p1p_p1w.sync
+SYNC=p2p_p2w.sync
 
 cd "$WORKDIR"
 
@@ -48,8 +47,8 @@ if [[ ! -s $SYNC ]]; then
         -B \
         -d 1000 \
         -f ref/refgenome.fa \
-        map/pop1p.sorted.bam \
-        map/pop1w.sorted.bam \
+        pmerged/pop2p_sorted.bam \
+        wmerged/pop2w_sorted.bam \
     | java -ea -Xmx28g -jar "$POPDIR/mpileup2sync.jar" \
         --input - \
         --output $SYNC \
@@ -68,9 +67,9 @@ echo "Starting FST $(date)"
 for WS in 1 500; do
 
     if [[ $WS -eq 500 ]]; then
-        OUT=p1p_p1w_w500
+        OUT=p2p_p2w_w500
     else
-        OUT=p1p_p1w
+        OUT=p2p_p2w
     fi
 
     if [[ ! -s ${OUT}.fst ]]; then
@@ -92,7 +91,7 @@ done
 # STEP 6 — EXPORT FST → IGV
 ########################################
 
-for OUT in p1p_p1w p1p_p1w_w500; do
+for OUT in p2p_p2w p2p_p2w_w500; do
     if [[ ! -s ${OUT}.igv ]]; then
         perl "$POPDIR/export/pwc2igv.pl" \
             --input ${OUT}.fst \
@@ -106,7 +105,7 @@ done
 
 echo "Starting Fisher $(date)"
 
-if [[ ! -s p1p_p1w.fet ]]; then
+if [[ ! -s p2p_p2w.fet ]]; then
     perl "$POPDIR/fisher-test.pl" \
         --input  $SYNC \
         --output p1p_p1w.fet \
@@ -116,10 +115,10 @@ if [[ ! -s p1p_p1w.fet ]]; then
         --suppress-noninformative
 fi
 
-if [[ ! -s p1p_p1w_fet.igv ]]; then
+if [[ ! -s p2p_p2w_fet.igv ]]; then
     perl "$POPDIR/export/pwc2igv.pl" \
-        --input  p1p_p1w.fet \
-        --output p1p_p1w_fet.igv
+        --input  p2p_p2w.fet \
+        --output p2p_p2w_fet.igv
 fi
 
 echo "Pipeline complete $(date)"
