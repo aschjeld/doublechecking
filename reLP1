@@ -1,0 +1,118 @@
+#!/bin/bash
+#SBATCH --job-name=LP1
+#SBATCH --output=LP1.out
+#SBATCH --error=LP1.err
+#SBATCH --partition=long
+#SBATCH --nodes=1
+#SBATCH --ntasks=1
+#SBATCH --cpus-per-task=10
+#SBATCH --mem=20G
+#SBATCH --time=3-00:00:00
+
+########################################
+# Load environment
+########################################
+
+source /private/groups/kaylab/aschjeld/setup_conda.sh
+conda activate popoolation2
+
+export PATH="$HOME/perl5/bin:$PATH"
+export PERL5LIB="$HOME/perl5/lib/perl5:$PERL5LIB"
+
+# Test module
+perl -MText::NSP::Measures::2D::Fisher::twotailed -e 'print "Perl module works\n"'
+
+export LC_ALL=C
+export LANG=C
+
+set -euo pipefail
+set -x
+
+WORKDIR=/hb/groups/kay_lab/popoolation2/populations/LP1
+POPDIR=/hb/groups/kay_lab/popoolation2/populations/LP1/popoolation2_1201
+
+echo "WORKDIR is $WORKDIR"
+echo "POPDIR is $POPDIR"
+
+pwd
+ls -lh $POPDIR
+which java
+java -version
+
+# generating mpileup file
+echo "Converting mpileup to sync..."
+java -ea -Xmx28g -jar "$POPDIR/mpileup2sync.jar" \
+    --input p1p_p1w.mpileup \
+    --output p1p_p1w.sync \
+    --fastq-type sanger \
+    --min-qual 20 \
+    --threads 10
+
+
+
+
+cd "$WORKDIR"
+
+
+########################################
+# STEP 5 — FST WINDOWS
+########################################
+
+echo "Starting FST calculation $(date)"
+
+for WS in 1 500; do    if [[ $WS -eq 500 ]]; then
+        OUT=p1p_p1w_w500
+    else
+        OUT=p1p_p1w
+    fi
+
+    if [[ ! -s ${OUT}.fst ]]; then
+        perl "$POPDIR"/fst-sliding.pl \
+            --input p1p_p1w.sync \
+            --output ${OUT}.fst \
+            --suppress-noninformative \
+            --min-count 6 \
+            --min-coverage 50 \
+            --max-coverage 200 \
+            --min-covered-fraction 1 \
+            --window-size $WS \
+            --step-size $WS \
+            --pool-size 58
+    fi
+done
+
+########################################
+# STEP 6 — EXPORT FST → IGV
+########################################
+
+for OUT in p1p_p1w p1p_p1w_w500; do
+    if [[ ! -s ${OUT}.igv ]]; then
+        perl "$POPDIR"/export/pwc2igv.pl \
+            --input ${OUT}.fst \
+            --output ${OUT}.igv
+    fi
+done
+
+########################################
+# STEP 7 — FISHER TEST
+########################################
+
+echo "Starting Fisher test $(date)"
+
+if [[ ! -s p1p_p1w.fet ]]; then
+    perl "$POPDIR"/fisher-test.pl \
+        --input  p1p_p1w.sync \
+        --output p1p_p1w.fet \
+        --min-count 6 \
+        --min-coverage 50 \
+        --max-coverage 200 \
+        --suppress-noninformative
+fi
+
+if [[ ! -s p1p_p1w_fet.igv ]]; then
+    perl "$POPDIR"/export/pwc2igv.pl \
+        --input  p1p_p1w.fet \
+        --output p1p_p1w_fet.igv
+fi
+
+echo "Pipeline complete $(date)"
